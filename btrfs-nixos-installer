@@ -261,16 +261,22 @@ EOF
 setup_disk() {
     local disk_device=$1
     
+    local dev_name=$(basename "$disk_device")
+    local part_prefix=""
+    if [[ "${dev_name: -1}" =~ [0-9] ]]; then
+        part_prefix="p"
+    fi
+    
     print_message "$GREEN" "Partitioning the disk..."
     printf "label: gpt\n,550M,U\n,,L\n" | sfdisk "$disk_device"
 
     print_message "$GREEN" "Formatting partitions..."
-    mkfs.vfat -F 32 "${disk_device}p1"
-    mkfs.btrfs -f "${disk_device}p2"
+    mkfs.vfat -F 32 "${disk_device}${part_prefix}1"
+    mkfs.btrfs -f "${disk_device}${part_prefix}2"
 
     print_message "$GREEN" "Mounting and creating subvolumes..."
     mkdir -p "$MOUNT_POINT"
-    mount "${disk_device}p2" "$MOUNT_POINT"
+    mount "${disk_device}${part_prefix}2" "$MOUNT_POINT"
 
     local subvolumes=("@" "@home" "@nix" "@log" "@.snapshots")
     local create_swap=$(prompt_yes_no "Do you want to create a swap subvolume?")
@@ -287,7 +293,7 @@ setup_disk() {
     local mount_opts="rw,relatime,compress=zstd:3,$ssd_option,discard=async,space_cache=v2"
 
     print_message "$GREEN" "Mounting subvolumes..."
-    mount -o "$mount_opts,subvol=/@" "${disk_device}p2" "$MOUNT_POINT"
+    mount -o "$mount_opts,subvol=/@" "${disk_device}${part_prefix}2" "$MOUNT_POINT"
 
     local -A mount_points=(
         ["home"]="@home"
@@ -302,9 +308,9 @@ setup_disk() {
         mkdir -p "$MOUNT_POINT/$dir"
         if [ "$dir" = "boot" ]; then
             mount -o "rw,relatime,fmask=0022,dmask=0022,codepage=437,iocharset=utf8,shortname=mixed,utf8,errors=remount-ro" \
-                  "${disk_device}p1" "$MOUNT_POINT/$dir"
+                  "${disk_device}${part_prefix}1" "$MOUNT_POINT/$dir"
         else
-            mount -o "$mount_opts,subvol=/${mount_points[$dir]}" "${disk_device}p2" "$MOUNT_POINT/$dir"
+            mount -o "$mount_opts,subvol=/${mount_points[$dir]}" "${disk_device}${part_prefix}2" "$MOUNT_POINT/$dir"
         fi
     done
 
@@ -313,8 +319,8 @@ setup_disk() {
         btrfs filesystem mkswapfile --size 8g --uuid clear "$MOUNT_POINT/swap/swapfile"
     fi
 
-    local efi_uuid=$(blkid -s UUID -o value "${disk_device}p1")
-    local root_uuid=$(blkid -s UUID -o value "${disk_device}p2")
+    local efi_uuid=$(blkid -s UUID -o value "${disk_device}${part_prefix}1")
+    local root_uuid=$(blkid -s UUID -o value "${disk_device}${part_prefix}2")
 
     print_message "$GREEN" "Generating NixOS configuration..."
     generate_hardware_configuration "$CONFIG_DIR/hardware-configuration.nix" "$root_uuid" "$efi_uuid" "$ssd_option" "$create_swap"
@@ -382,9 +388,9 @@ setup_partitions() {
         
         local disk_device=""
         while true; do
-            print_message "$CYAN" "Please enter the hard disk device to use (for example /dev/nvme0n1):"
+            print_message "$CYAN" "Please enter the hard disk device to use (for example /dev/nvme0n1 or /dev/sda):"
             read -r disk_device
-[[ -b "$disk_device" ]] && break
+            [[ -b "$disk_device" ]] && break
             print_message "$RED" "Invalid device. Please enter a valid block device."
         done
 
