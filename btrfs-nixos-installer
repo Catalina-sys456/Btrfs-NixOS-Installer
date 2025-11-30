@@ -289,19 +289,19 @@ setup_disk() {
     print_message "$GREEN" "Formatting partitions..."
     mkfs.vfat -F 32 "$efi_to_mount"
 
-    local crypt=$(prompt_yes_no "Do you wangt to encrypt the system?")
+    local crypt=$(prompt_yes_no "Do you want to encrypt the system?")
     if [ "$crypt" = "yes" ]; then
-	cryptsetup luksFormat "$root_to_mount"
-	cryptsetup open "$root_to_mount" "luks-nixos-installer"
-	local vg_name="vgnix"
-	vgcreate "$vg_name" /dev/mapper/luks-nixos-installer
-	echo "creat vg"
-	lvcreate --name root -l +100%FREE "$vg_name"
-	echo "creat lv"
-	mkfs.btrfs -f "/dev/mapper/${vg_name}-root"
-	local root_to_mount="/dev/mapper/${vg_name}-root"
+        cryptsetup luksFormat "$root_to_mount"
+        cryptsetup open "$root_to_mount" "luks-nixos-installer"
+        local vg_name="vgnix"
+        vgcreate "$vg_name" /dev/mapper/luks-nixos-installer
+        echo "creat vg"
+        lvcreate --name root -l +100%FREE "$vg_name"
+        echo "creat lv"
+        mkfs.btrfs -f "/dev/mapper/${vg_name}-root"
+        local root_to_mount="/dev/mapper/${vg_name}-root"
     else
-	mkfs.btrfs -f "$root_to_mount"
+        mkfs.btrfs -f "$root_to_mount"
     fi
 
     print_message "$GREEN" "Mounting and creating subvolumes..."
@@ -337,7 +337,7 @@ setup_disk() {
     for dir in "${!mount_points[@]}"; do
         mkdir -p "$MOUNT_POINT/$dir"
         if [ "$dir" = "boot" ]; then
-            mount -o "rw,relatime,fmask=0022,dmask=0022,codepage=437,iocharset=utf8,shortname=mixed,utf8,errors=remount-ro" \
+            mount -o "rw,relatime,fmask=0022,dmask=0022,codepage=437,iocharset=utf8,shortname=mixed,utf8,errors=remount-ro" "$efi_to_mount" "$MOUNT_POINT/$dir"
                   "$efi_to_mount" "$MOUNT_POINT/$dir"
         else
             mount -o "$mount_opts,subvol=/${mount_points[$dir]}" "$root_to_mount" "$MOUNT_POINT/$dir"
