@@ -1,4 +1,4 @@
-#!/bin/bash
+#! /usr/bin/env bash
 
 set -euo pipefail
 trap 'echo "Error on line $LINENO"' ERR
@@ -185,6 +185,8 @@ generate_hardware_configuration() {
     local efi_uuid=$3
     local ssd_option=$4
     local create_swap=$5
+    local luks_uuid=$6
+    local crypt=$7
 
     cat <<EOF > "$config_file"
 { config, lib, pkgs, modulesPath, ... }:
@@ -248,6 +250,18 @@ EOF
 EOF
     fi
 
+    if [ "$crypt" = "yes" ]; then
+	cat <<EOF >> "$config_file"
+  boot.initrd.luks.devices = {
+    luksroot = {
+      device = "/dev/disk/by-uuid/$luks_uuid";
+      allowDiscards = true;
+      preLVM = true;
+    };
+  };
+EOF
+    fi
+
     cat <<EOF >> "$config_file"
 
   networking.useDHCP = lib.mkDefault true;
@@ -266,17 +280,33 @@ setup_disk() {
     if [[ "${dev_name: -1}" =~ [0-9] ]]; then
         part_prefix="p"
     fi
+    local efi_to_mount="${disk_device}${part_prefix}1"
+    local root_to_mount="${disk_device}${part_prefix}2"
     
     print_message "$GREEN" "Partitioning the disk..."
     printf "label: gpt\n,550M,U\n,,L\n" | sfdisk "$disk_device"
 
     print_message "$GREEN" "Formatting partitions..."
-    mkfs.vfat -F 32 "${disk_device}${part_prefix}1"
-    mkfs.btrfs -f "${disk_device}${part_prefix}2"
+    mkfs.vfat -F 32 "$efi_to_mount"
+
+    local crypt=$(prompt_yes_no "Do you wangt to encrypt the system?")
+    if [ "$crypt" = "yes" ]; then
+	cryptsetup luksFormat "$root_to_mount"
+	cryptsetup open "$root_to_mount" "luks-nixos-installer"
+	local vg_name="vgnix"
+	vgcreate "$vg_name" /dev/mapper/luks-nixos-installer
+	echo "creat vg"
+	lvcreate --name root -l +100%FREE "$vg_name"
+	echo "creat lv"
+	mkfs.btrfs -f "/dev/mapper/${vg_name}-root"
+	local root_to_mount="/dev/mapper/${vg_name}-root"
+    else
+	mkfs.btrfs -f "$root_to_mount"
+    fi
 
     print_message "$GREEN" "Mounting and creating subvolumes..."
     mkdir -p "$MOUNT_POINT"
-    mount "${disk_device}${part_prefix}2" "$MOUNT_POINT"
+    mount "$root_to_mount" "$MOUNT_POINT"
 
     local subvolumes=("@" "@home" "@nix" "@log" "@.snapshots")
     local create_swap=$(prompt_yes_no "Do you want to create a swap subvolume?")
@@ -293,7 +323,7 @@ setup_disk() {
     local mount_opts="rw,relatime,compress=zstd:3,$ssd_option,discard=async,space_cache=v2"
 
     print_message "$GREEN" "Mounting subvolumes..."
-    mount -o "$mount_opts,subvol=/@" "${disk_device}${part_prefix}2" "$MOUNT_POINT"
+    mount -o "$mount_opts,subvol=/@" "$root_to_mount" "$MOUNT_POINT"
 
     local -A mount_points=(
         ["home"]="@home"
@@ -308,9 +338,9 @@ setup_disk() {
         mkdir -p "$MOUNT_POINT/$dir"
         if [ "$dir" = "boot" ]; then
             mount -o "rw,relatime,fmask=0022,dmask=0022,codepage=437,iocharset=utf8,shortname=mixed,utf8,errors=remount-ro" \
-                  "${disk_device}${part_prefix}1" "$MOUNT_POINT/$dir"
+                  "$efi_to_mount" "$MOUNT_POINT/$dir"
         else
-            mount -o "$mount_opts,subvol=/${mount_points[$dir]}" "${disk_device}${part_prefix}2" "$MOUNT_POINT/$dir"
+            mount -o "$mount_opts,subvol=/${mount_points[$dir]}" "$root_to_mount" "$MOUNT_POINT/$dir"
         fi
     done
 
@@ -319,11 +349,12 @@ setup_disk() {
         btrfs filesystem mkswapfile --size 8g --uuid clear "$MOUNT_POINT/swap/swapfile"
     fi
 
-    local efi_uuid=$(blkid -s UUID -o value "${disk_device}${part_prefix}1")
-    local root_uuid=$(blkid -s UUID -o value "${disk_device}${part_prefix}2")
+    local efi_uuid=$(blkid -s UUID -o value "$efi_to_mount")
+    local root_uuid=$(blkid -s UUID -o value "$root_to_mount")
+    local luks_uuid=$(blkid -s UUID -o value "${disk_device}${part_prefix}2")
 
     print_message "$GREEN" "Generating NixOS configuration..."
-    generate_hardware_configuration "$CONFIG_DIR/hardware-configuration.nix" "$root_uuid" "$efi_uuid" "$ssd_option" "$create_swap"
+    generate_hardware_configuration "$CONFIG_DIR/hardware-configuration.nix" "$root_uuid" "$efi_uuid" "$ssd_option" "$create_swap" "$luks_uuid" "$crypt"
 }
 
 configure_system() {
